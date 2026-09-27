@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Cartes de révision stockées localement." />
+    <title>Cartes de révision</title>
+    <link rel="stylesheet" href="./vendor/pico.min.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="./vendor/vue.global.prod.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <main class="container" id="app">
+      <!-- Ce template est compilé par Vue directement dans le navigateur. -->
+      <header class="app-header">
+        <nav aria-label="Navigation principale">
+          <button type="button" :class="{ secondary: view !== 'practice' }" @click="view = 'practice'">
+            Révision
+          </button>
+          <button type="button" :class="{ secondary: view !== 'admin' }" @click="view = 'admin'">
+            Administration
+          </button>
+        </nav>
+      </header>
+
+      <p v-if="storageError" class="storage-error" role="alert">{{ storageError }}</p>
+
+      <section v-if="view === 'practice'" aria-labelledby="practice-title">
+        <h2 id="practice-title">Révision</h2>
+
+        <template v-if="boards.length">
+          <fieldset class="board-picker">
+            <legend>Listes à utiliser</legend>
+            <div class="picker-actions">
+              <button type="button" class="outline" @click="selectAllBoards">Toutes</button>
+              <button type="button" class="outline secondary" @click="selectedBoardIds = []">Aucune</button>
+            </div>
+            <label v-for="board in boards" :key="board.id" class="board-choice">
+              <input v-model="selectedBoardIds" type="checkbox" :value="board.id" />
+              {{ board.name || 'Liste sans nom' }}
+              <small>({{ usableRows(board).length }} question{{ usableRows(board).length > 1 ? 's' : '' }})</small>
+            </label>
+          </fieldset>
+
+          <article v-if="phase === 'answering' || phase === 'review'" class="question-card">
+            <header>
+              <small>{{ currentQuestion.boardName }} · {{ remainingQuestions.length + 1 }} question{{ remainingQuestions.length ? 's' : '' }} restante{{ remainingQuestions.length ? 's' : '' }}</small>
+              <h3>{{ currentQuestion.question }}</h3>
+            </header>
+
+            <label v-if="phase === 'answering'" for="user-answer">
+              Ta réponse
+              <input id="user-answer" v-model="userAnswer" type="text" autocomplete="off" autofocus @keyup.enter="revealAnswer" />
+            </label>
+            <button v-if="phase === 'answering'" type="button" @click="revealAnswer">Valider</button>
+
+            <template v-else>
+              <p class="expected-answer" :class="answerClass(currentQuestion.answer)">
+                {{ currentQuestion.answer || '—' }}
+                <span class="result-icon" :class="isCorrect ? 'result-success' : 'result-fail'" :aria-label="isCorrect ? 'Réponse juste' : 'Réponse fausse'" role="img">
+                  {{ isCorrect ? '✓' : '✕' }}
+                </span>
+              </p>
+              <footer>
+                <button type="button" @click="drawNextQuestion">Question suivante</button>
+              </footer>
+            </template>
+          </article>
+
+          <article v-else-if="phase === 'finished'">
+            <h3>Stock épuisé</h3>
+            <p>Toutes les questions sélectionnées ont été vues une fois.</p>
+            <button type="button" @click="startSession">Recommencer cette sélection</button>
+          </article>
+        </template>
+
+        <article v-else>
+          <h3>Aucune liste pour le moment</h3>
+          <p>Crée une liste et ses questions dans l’administration.</p>
+          <button type="button" @click="view = 'admin'">Créer une liste</button>
+        </article>
+      </section>
+
+      <section v-else aria-labelledby="admin-title">
+        <h2 id="admin-title">Administration</h2>
+        <form class="new-board" @submit.prevent="addBoard">
+          <label for="new-board-name">
+            Nom de la nouvelle liste
+            <input id="new-board-name" v-model.trim="newBoardName" type="text" placeholder="Par exemple : articles allemands" required />
+          </label>
+          <button type="submit">Créer la liste</button>
+        </form>
+
+        <section class="transfer-controls" aria-labelledby="transfer-title">
+          <h3 id="transfer-title">Importer ou exporter les listes</h3>
+          <div>
+            <button type="button" class="outline" @click="exportBoards">Exporter en JSON</button>
+            <label class="import-button" for="import-boards">
+              Importer un JSON
+              <input id="import-boards" type="file" accept="application/json,.json" @change="importBoards" />
+            </label>
+          </div>
+          <p v-if="importMessage" class="import-message" role="status">{{ importMessage }}</p>
+        </section>
+
+        <article v-for="board in boards" :key="board.id" class="board-editor">
+          <header class="editor-header">
+            <label :for="`board-${board.id}`">
+              Nom de la liste
+              <input :id="`board-${board.id}`" v-model.trim="board.name" type="text" required />
+            </label>
+            <button type="button" class="outline contrast delete-button" @click="deleteBoard(board.id)">Supprimer</button>
+          </header>
+
+          <div class="row-heading" aria-hidden="true">
+            <span>Question</span>
+            <span>Réponse</span>
+            <span></span>
+          </div>
+          <div v-for="(row, index) in board.rows" :key="row.id" class="question-row">
+            <label>
+              <span class="visually-hidden">Question {{ index + 1 }}</span>
+              <input v-model.trim="row.question" type="text" placeholder="Question" />
+            </label>
+            <label>
+              <span class="visually-hidden">Réponse {{ index + 1 }}</span>
+              <input v-model.trim="row.answer" type="text" placeholder="Réponse" />
+            </label>
+            <button type="button" class="outline secondary icon-button" :aria-label="`Supprimer la ligne ${index + 1}`" @click="deleteRow(board, row.id)">×</button>
+          </div>
+          <footer>
+            <button type="button" class="outline" @click="addRow(board)">Ajouter une ligne</button>
+          </footer>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
